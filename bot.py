@@ -13,6 +13,7 @@ import yt_dlp
 VK_TOKEN = os.environ.get('VK_TOKEN')
 GROUP_ID = os.environ.get('GROUP_ID')  # Первая группа
 GROUP_ID_2 = os.environ.get('GROUP_ID_2')  # Вторая группа
+CLIP_TITLE = "#приколы #ржака #юмор"
 
 # Донорские паблики, из которых берем контент
 SOURCES = [
@@ -131,9 +132,9 @@ def clone_post_to_group(vk_session, group_id, post, used_ids):
         video_url = f"https://vk.com/video{video_data['owner_id']}_{video_data['id']}"
         print(f"  Клонируем видео: {video_url}")
 
-        filepath, title = download_video(video_url)
+        filepath, _ = download_video(video_url)
         if filepath and os.path.exists(filepath):
-            final_title = title or text or "Видео"
+            final_title = CLIP_TITLE
             attachment = upload_video_to_vk(vk_session, group_id, filepath, final_title)
             os.remove(filepath)
 
@@ -215,19 +216,15 @@ def get_next_type(current_type):
     if current_type == 'video': return 'text'
     return 'text'
 
-def process_group(vk_session, group_id):
+def process_group(vk_session, group_id, top_posts, used_ids):
     print(f"\n--- Обработка группы {group_id} (Режим: топ-посты доноров) ---")
 
-    top_posts = get_top_posts_from_sources(vk_session)
     if not top_posts:
         print("Не удалось получить топовые посты из донорских пабликов")
         return
 
     start_time = datetime.now()
     posts_count = 10
-
-    # Множество для отслеживания дубликатов в рамках одного запуска
-    used_ids = set()
 
     index = 0
     for i in range(posts_count):
@@ -250,14 +247,16 @@ def process_group(vk_session, group_id):
 def main():
     print("Запуск бота...")
     vk_session = get_vk_session()
+    top_posts = get_top_posts_from_sources(vk_session)
+    used_ids = set()
     
     if GROUP_ID:
-        process_group(vk_session, GROUP_ID)
+        process_group(vk_session, GROUP_ID, top_posts, used_ids)
     else:
         print("GROUP_ID не задан")
         
     if GROUP_ID_2:
-        process_group(vk_session, GROUP_ID_2)
+        process_group(vk_session, GROUP_ID_2, top_posts, used_ids)
     else:
         print("GROUP_ID_2 не задан (вторая группа пропущена)")
 
