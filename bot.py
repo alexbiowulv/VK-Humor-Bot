@@ -278,24 +278,11 @@ def get_clip_for_group(vk_session, group_id, used_video_sources):
     return None, None
 
 def process_group(vk_session, group_id, memes, used_video_sources, used_meme_urls):
-    print(f"\n--- Обработка группы {group_id} (Видеоклипы + мемы topmemas) ---")
+    print(f"\n--- Обработка группы {group_id} (Мемы topmemas) ---")
     start_time = datetime.now()
     posts_count = 10
 
     scheduled = 0
-    videos_needed = 3
-
-    while scheduled < posts_count and videos_needed > 0:
-        message, attachment = get_clip_for_group(vk_session, group_id, used_video_sources)
-        if message or attachment:
-            publish_time = start_time + timedelta(hours=scheduled+1)
-            post_to_vk(vk_session, group_id, message, attachment, int(publish_time.timestamp()))
-            scheduled += 1
-            videos_needed -= 1
-            time.sleep(2)
-        else:
-            break
-
     meme_index = 0
     while scheduled < posts_count and meme_index < len(memes):
         img_url, alt = memes[meme_index]
