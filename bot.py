@@ -23,87 +23,111 @@ def get_vk_session():
         sys.exit(1)
     return vk_api.VkApi(token=VK_TOKEN)
 
-# --- Логика для Группы 1 (Anekdot.ru) ---
+# --- Логика поиска ВКонтакте ---
 
-def get_random_joke():
-    """Парсит случайный анекдот с anekdot.ru"""
-    try:
-        url = 'https://www.anekdot.ru/random/anekdot/'
-        response = requests.get(url, headers=HEADERS)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.text, 'lxml')
-        jokes_list = soup.find_all('div', class_='text')
-        
-        if not jokes_list: return None, None
-            
-        joke_div = random.choice(jokes_list)
-        for br in joke_div.find_all("br"): br.replace_with("\n")
-        return joke_div.get_text().strip(), None
-    except Exception as e:
-        print(f"Ошибка (joke): {e}")
-        return None, None
-
-def get_anekdot_meme(vk_session, group_id):
-    """Парсит случайный мем с anekdot.ru"""
-    try:
-        url = 'https://www.anekdot.ru/random/mem/'
-        response = requests.get(url, headers=HEADERS)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.text, 'lxml')
-        images = soup.select('div.text img')
-        if not images: return None, None
-            
-        img_url = random.choice(images).get('src')
-        if not img_url.startswith('http'): img_url = 'https:' + img_url
-            
-        return upload_photo_to_vk(vk_session, group_id, img_url)
-    except Exception as e:
-        print(f"Ошибка (meme): {e}")
-        return None, None
-
-def get_vk_video(vk_session):
-    """Ищет видео в ВК"""
+def get_vk_search_content(vk_session, group_id, used_ids):
+    """Ищет контент (мемы, видео) прямо ВКонтакте"""
     try:
         vk = vk_session.get_api()
-        queries = ["смешное видео", "ржака", "прикол", "funny video", "мем видео"]
-        videos = vk.video.search(q=random.choice(queries), sort=2, filters='short', count=20, adult=0)
         
-        if not videos['items']: return None, None
-        video = random.choice(videos['items'])
-        return video.get('title', 'Видео'), f"video{video['owner_id']}_{video['id']}"
+        # Запросы для поиска
+        queries = [
+            "ржака", "приколы", "мемы", "смешное", "юмор", 
+            "стендап", "fail compilation", "смешные животные",
+            "угар", "лол", "memes", "funny"
+        ]
+        query = random.choice(queries)
+        
+        # 50% шанс на видео, 50% на картинку (пост)
+        is_video = random.choice([True, False])
+        
+        if is_video:
+            # Поиск видео
+            # Используем offset для уникальности
+            offset = random.randint(0, 50) 
+            videos = vk.video.search(
+                q=query, 
+                sort=2, # по релевантности
+                filters='short', # короткие
+                count=10, 
+                offset=offset,
+                adult=0
+            )
+            
+            if not videos['items']: return None, None
+            
+            # Выбираем видео, которого еще не было
+            for _ in range(5):
+                video = random.choice(videos['items'])
+                video_id = f"video{video['owner_id']}_{video['id']}"
+                if video_id not in used_ids:
+                    used_ids.add(video_id)
+                    title = video.get('title', 'Видео')
+                    return title, video_id
+                    
+        else:
+            # Поиск постов (картинки)
+            # newsfeed.search ищет по всему ВК
+            start_time = int((datetime.now() - timedelta(hours=24)).timestamp())
+            
+            posts = vk.newsfeed.search(
+                q=query,
+                count=30,
+                start_time=start_time, # Свежее за 24 часа
+                extended=1
+            )
+            
+            if not posts['items']: return None, None
+            
+            # Фильтруем посты с фото
+            candidates = []
+            for post in posts['items']:
+                # Пропускаем репосты (нам нужен оригинал или контент)
+                if 'copy_history' in post:
+                     # Можно брать из copy_history, но проще искать оригиналы
+                     continue
+                     
+                if 'attachments' in post:
+                    for att in post['attachments']:
+                        if att['type'] == 'photo':
+                            candidates.append((post, att['photo']))
+                            break
+            
+            if not candidates: return None, None
+            
+            # Выбираем случайный пост
+            for _ in range(5):
+                post, photo = random.choice(candidates)
+                post_id = f"wall{post['owner_id']}_{post['id']}"
+                
+                if post_id not in used_ids:
+                    used_ids.add(post_id)
+                    
+                    # Берем самую большую картинку
+                    sizes = photo.get('sizes', [])
+                    if not sizes: continue
+                    # Сортируем по width
+                    best_size = sorted(sizes, key=lambda x: x['width'])[-1]
+                    img_url = best_size['url']
+                    
+                    # Текст поста (если не слишком длинный)
+                    text = post.get('text', '')
+                    if len(text) > 200: text = "" # Если слишком длинный, берем только картинку
+                    
+                    # Загружаем
+                    msg, attachment = upload_photo_to_vk(vk_session, group_id, img_url)
+                    
+                    # Если есть текст, добавляем его
+                    final_msg = text if text else msg
+                    
+                    return final_msg, attachment
+
+        return None, None
+        
     except Exception as e:
-        print(f"Ошибка (video): {e}")
+        print(f"Ошибка поиска VK: {e}")
         return None, None
 
-# --- Логика для Группы 2 (Meme API) ---
-
-def get_meme_from_api(vk_session, group_id):
-    """Получает мем через Meme API (Reddit)"""
-    try:
-        # Ищем в русских сабреддитах
-        subreddits = ['pikabu', 'ru_memes', 'PikabuPolitics', 'KafkaFPS']
-        subreddit = random.choice(subreddits)
-        url = f"https://meme-api.com/gimme/{subreddit}"
-        
-        response = requests.get(url)
-        response.raise_for_status()
-        data = response.json()
-        
-        if 'url' not in data: return None, None
-        
-        # Заголовок поста как текст
-        title = data.get('title', '')
-        image_url = data.get('url')
-        
-        # Загружаем картинку
-        msg, attachment = upload_photo_to_vk(vk_session, group_id, image_url)
-        return title, attachment
-        
-    except Exception as e:
-        print(f"Ошибка (API meme): {e}")
-        return None, None
 
 # --- Общие функции ---
 
@@ -162,44 +186,23 @@ def get_next_type(current_type):
     if current_type == 'video': return 'text'
     return 'text'
 
-def process_group(vk_session, group_id, mode='anekdot'):
-    print(f"\n--- Обработка группы {group_id} (Режим: {mode}) ---")
-    last_type = get_last_post_type(vk_session, group_id)
-    current_type = last_type
+def process_group(vk_session, group_id):
+    print(f"\n--- Обработка группы {group_id} (Режим: VK Search) ---")
     
     start_time = datetime.now()
     posts_count = 10
     
+    # Множество для отслеживания дубликатов в рамках одного запуска
+    used_ids = set()
+    
     for i in range(posts_count):
-        current_type = get_next_type(current_type)
-        message, attachment = None, None
+        message, attachment = get_vk_search_content(vk_session, group_id, used_ids)
         
-        if mode == 'anekdot':
-            # Логика первой группы
-            if current_type == 'photo':
-                message, attachment = get_anekdot_meme(vk_session, group_id)
-                if not attachment: current_type = 'text'
-            
-            if current_type == 'video':
-                message, attachment = get_vk_video(vk_session)
-                if not attachment: current_type = 'text'
-                
-            if current_type == 'text':
-                message, attachment = get_random_joke()
-                
-        elif mode == 'meme_api':
-            # Логика второй группы (преимущественно мемы из API)
-            # Иногда можно разбавлять видео
-            if random.random() < 0.2: # 20% шанс на видео
-                 message, attachment = get_vk_video(vk_session)
-            else:
-                 message, attachment = get_meme_from_api(vk_session, group_id)
-
         if message or attachment:
             publish_time = start_time + timedelta(hours=i+1)
             post_to_vk(vk_session, group_id, message, attachment, int(publish_time.timestamp()))
         else:
-            print("  Не удалось получить контент")
+            print("  Не удалось найти контент")
             
         time.sleep(2)
 
@@ -208,12 +211,12 @@ def main():
     vk_session = get_vk_session()
     
     if GROUP_ID:
-        process_group(vk_session, GROUP_ID, mode='anekdot')
+        process_group(vk_session, GROUP_ID)
     else:
         print("GROUP_ID не задан")
         
     if GROUP_ID_2:
-        process_group(vk_session, GROUP_ID_2, mode='meme_api')
+        process_group(vk_session, GROUP_ID_2)
     else:
         print("GROUP_ID_2 не задан (вторая группа пропущена)")
 
