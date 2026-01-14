@@ -7,11 +7,19 @@ import random
 import sys
 import time
 from datetime import datetime, timedelta
+import yt_dlp
 
 # Настройки
 VK_TOKEN = os.environ.get('VK_TOKEN')
-GROUP_ID = os.environ.get('GROUP_ID') # Первая группа (Anekdot.ru)
-GROUP_ID_2 = os.environ.get('GROUP_ID_2') # Вторая группа (Meme API)
+GROUP_ID = os.environ.get('GROUP_ID')  # Первая группа
+GROUP_ID_2 = os.environ.get('GROUP_ID_2')  # Вторая группа
+
+# Донорские паблики, из которых берем контент
+SOURCES = [
+    "dobriememes",
+    "porno_yumor",
+    "club99177290",
+]
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
@@ -23,110 +31,131 @@ def get_vk_session():
         sys.exit(1)
     return vk_api.VkApi(token=VK_TOKEN)
 
-# --- Логика поиска ВКонтакте ---
-
-def get_vk_search_content(vk_session, group_id, used_ids):
-    """Ищет контент (мемы, видео) прямо ВКонтакте"""
+def download_video(video_url):
+    """Скачивает видео с ВК с помощью yt-dlp"""
     try:
-        vk = vk_session.get_api()
-        
-        # Запросы для поиска
-        queries = [
-            "ржака", "приколы", "мемы", "смешное", "юмор", 
-            "стендап", "fail compilation", "смешные животные",
-            "угар", "лол", "memes", "funny"
-        ]
-        query = random.choice(queries)
-        
-        # 50% шанс на видео, 50% на картинку (пост)
-        is_video = random.choice([True, False])
-        
-        if is_video:
-            # Поиск видео
-            # Используем offset для уникальности
-            offset = random.randint(0, 50) 
-            videos = vk.video.search(
-                q=query, 
-                sort=2, # по релевантности
-                filters='short', # короткие
-                count=10, 
-                offset=offset,
-                adult=0
-            )
-            
-            if not videos['items']: return None, None
-            
-            # Выбираем видео, которого еще не было
-            for _ in range(5):
-                video = random.choice(videos['items'])
-                video_id = f"video{video['owner_id']}_{video['id']}"
-                if video_id not in used_ids:
-                    used_ids.add(video_id)
-                    title = video.get('title', 'Видео')
-                    return title, video_id
-                    
-        else:
-            # Поиск постов (картинки)
-            # newsfeed.search ищет по всему ВК
-            start_time = int((datetime.now() - timedelta(hours=24)).timestamp())
-            
-            posts = vk.newsfeed.search(
-                q=query,
-                count=30,
-                start_time=start_time, # Свежее за 24 часа
-                extended=1
-            )
-            
-            if not posts['items']: return None, None
-            
-            # Фильтруем посты с фото
-            candidates = []
-            for post in posts['items']:
-                # Пропускаем репосты (нам нужен оригинал или контент)
-                if 'copy_history' in post:
-                     # Можно брать из copy_history, но проще искать оригиналы
-                     continue
-                     
-                if 'attachments' in post:
-                    for att in post['attachments']:
-                        if att['type'] == 'photo':
-                            candidates.append((post, att['photo']))
-                            break
-            
-            if not candidates: return None, None
-            
-            # Выбираем случайный пост
-            for _ in range(5):
-                post, photo = random.choice(candidates)
-                post_id = f"wall{post['owner_id']}_{post['id']}"
-                
-                if post_id not in used_ids:
-                    used_ids.add(post_id)
-                    
-                    # Берем самую большую картинку
-                    sizes = photo.get('sizes', [])
-                    if not sizes: continue
-                    # Сортируем по width
-                    best_size = sorted(sizes, key=lambda x: x['width'])[-1]
-                    img_url = best_size['url']
-                    
-                    # Текст поста (если не слишком длинный)
-                    text = post.get('text', '')
-                    if len(text) > 200: text = "" # Если слишком длинный, берем только картинку
-                    
-                    # Загружаем
-                    msg, attachment = upload_photo_to_vk(vk_session, group_id, img_url)
-                    
-                    # Если есть текст, добавляем его
-                    final_msg = text if text else msg
-                    
-                    return final_msg, attachment
-
-        return None, None
-        
+        ydl_opts = {
+            'format': 'best[ext=mp4]/best',
+            'outtmpl': f'temp_video_{random.randint(10000, 99999)}.%(ext)s',
+            'quiet': True,
+            'no_warnings': True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=True)
+            filename = ydl.prepare_filename(info)
+            return filename, info.get('title', 'Video')
     except Exception as e:
-        print(f"Ошибка поиска VK: {e}")
+        print(f"Ошибка скачивания видео ({video_url}): {e}")
         return None, None
+
+def upload_video_to_vk(vk_session, group_id, filepath, title):
+    """Загружает видео в группу ВК"""
+    try:
+        upload = VkUpload(vk_session)
+        # Загружаем видео (оно не публикуется сразу, wallpost=0)
+        video = upload.video(
+            video_file=filepath,
+            name=title,
+            description="Uploaded via Bot",
+            is_private=0,
+            wallpost=0,
+            group_id=int(group_id)
+        )
+        # Возвращает словарь, например {'owner_id': 123, 'video_id': 456}
+        if 'video_id' in video:
+             # video['owner_id'] может быть положительным (пользователь) или отрицательным (группа)
+             # Нам нужен ID владельца видео для attachment
+             owner_id = video.get('owner_id')
+             video_id = video.get('video_id')
+             return f"video{owner_id}_{video_id}"
+        return None
+    except Exception as e:
+        print(f"Ошибка загрузки видео в ВК: {e}")
+        return None
+
+# --- Логика выбора топовых постов из донорских пабликов ---
+
+def get_top_posts_from_sources(vk_session):
+    """Возвращает список топовых постов за последние сутки из SOURCES"""
+    vk = vk_session.get_api()
+    now_ts = int(time.time())
+    day_ago = now_ts - 24 * 60 * 60
+    candidates = []
+
+    for source in SOURCES:
+        try:
+            posts = vk.wall.get(domain=source, count=100, filter='owner')
+        except Exception as e:
+            print(f"Ошибка получения постов из {source}: {e}")
+            continue
+
+        for post in posts.get('items', []):
+            post_date = post.get('date', 0)
+            if post_date < day_ago:
+                continue
+
+            likes = post.get('likes', {}).get('count', 0)
+            reposts = post.get('reposts', {}).get('count', 0)
+            comments = post.get('comments', {}).get('count', 0)
+            views = post.get('views', {}).get('count', 0)
+
+            score = likes * 3 + reposts * 5 + comments * 2 + views * 0.001
+            candidates.append((score, source, post))
+
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return [p for _, _, p in candidates]
+
+
+def clone_post_to_group(vk_session, group_id, post, used_ids):
+    """Клонирует пост: видео как клип, мем как картинку"""
+    post_key = f"{post.get('owner_id')}_{post.get('id')}"
+    if post_key in used_ids:
+        return None, None
+    used_ids.add(post_key)
+
+    text = post.get('text', '') or ''
+    if len(text) > 300:
+        text = text[:297] + "..."
+
+    attachments = post.get('attachments', [])
+    video_data = None
+    photo_data = None
+
+    for att in attachments:
+        if att.get('type') == 'video' and video_data is None:
+            video_data = att.get('video')
+        if att.get('type') == 'photo' and photo_data is None:
+            photo_data = att.get('photo')
+
+    if video_data is not None:
+        video_url = f"https://vk.com/video{video_data['owner_id']}_{video_data['id']}"
+        print(f"  Клонируем видео: {video_url}")
+
+        filepath, title = download_video(video_url)
+        if filepath and os.path.exists(filepath):
+            final_title = title or text or "Видео"
+            attachment = upload_video_to_vk(vk_session, group_id, filepath, final_title)
+            os.remove(filepath)
+
+            if attachment:
+                message = text or final_title
+                return message, attachment
+            else:
+                print("  Не удалось загрузить видео в группу")
+        else:
+            print("  Не удалось скачать видео")
+
+    if photo_data is not None:
+        sizes = photo_data.get('sizes', [])
+        if sizes:
+            best_size = sorted(sizes, key=lambda x: x.get('width', 0))[-1]
+            img_url = best_size.get('url')
+            if img_url:
+                msg, attachment = upload_photo_to_vk(vk_session, group_id, img_url)
+                message = text or msg
+                return message, attachment
+
+    return None, None
 
 
 # --- Общие функции ---
@@ -187,23 +216,35 @@ def get_next_type(current_type):
     return 'text'
 
 def process_group(vk_session, group_id):
-    print(f"\n--- Обработка группы {group_id} (Режим: VK Search) ---")
-    
+    print(f"\n--- Обработка группы {group_id} (Режим: топ-посты доноров) ---")
+
+    top_posts = get_top_posts_from_sources(vk_session)
+    if not top_posts:
+        print("Не удалось получить топовые посты из донорских пабликов")
+        return
+
     start_time = datetime.now()
     posts_count = 10
-    
+
     # Множество для отслеживания дубликатов в рамках одного запуска
     used_ids = set()
-    
+
+    index = 0
     for i in range(posts_count):
-        message, attachment = get_vk_search_content(vk_session, group_id, used_ids)
-        
+        message, attachment = None, None
+
+        while index < len(top_posts) and not (message or attachment):
+            post = top_posts[index]
+            index += 1
+            message, attachment = clone_post_to_group(vk_session, group_id, post, used_ids)
+
         if message or attachment:
             publish_time = start_time + timedelta(hours=i+1)
             post_to_vk(vk_session, group_id, message, attachment, int(publish_time.timestamp()))
         else:
-            print("  Не удалось найти контент")
-            
+            print("  Нет больше подходящих постов для публикации")
+            break
+
         time.sleep(2)
 
 def main():
