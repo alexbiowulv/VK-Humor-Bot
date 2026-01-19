@@ -23,6 +23,14 @@ jobs:
         python-version: '3.11'
         cache: 'pip'
 
+    - name: Cache seen memes
+      uses: actions/cache@v3
+      with:
+        path: .cache
+        key: seen-memes-${{ github.ref }}-${{ github.run_id }}
+        restore-keys: |
+          seen-memes-${{ github.ref }}-
+
     - name: Install system deps
       run: |
         sudo apt-get update

@@ -35,16 +35,22 @@ def get_reddit_memes(max_items=80):
                 for m in data["memes"]:
                     img = m.get("url")
                     title = (m.get("title") or "").strip()
+                    post_link = m.get("postLink") or ""
                     if not re.search(r"[А-Яа-яЁё]", title):
                         continue
                     if not img or not img.startswith("http"):
+                        continue
+                    if not post_link or not is_fresh_post(post_link, 24):
                         continue
                     if any(ext in img.lower() for ext in [".jpg", ".jpeg", ".png", ".webp"]):
                         items.append((img, title))
             elif isinstance(data, dict) and "url" in data:
                 img = data.get("url")
                 title = (data.get("title") or "").strip()
+                post_link = data.get("postLink") or ""
                 if not re.search(r"[А-Яа-яЁё]", title or ""):
+                    continue
+                if not post_link or not is_fresh_post(post_link, 24):
                     continue
                 if img and img.startswith("http"):
                     items.append((img, title))
@@ -59,10 +65,54 @@ def get_reddit_memes(max_items=80):
         seen.add(url)
         uniq.append((url, title))
     return uniq[:max_items]
+def is_fresh_post(post_link, max_age_hours):
+    try:
+        json_url = post_link
+        if not json_url.endswith(".json"):
+            json_url = json_url + ".json"
+        resp = requests.get(json_url, headers=HEADERS, timeout=20)
+        resp.raise_for_status()
+        j = resp.json()
+        created = None
+        if isinstance(j, list) and j:
+            a = j[0]
+            if isinstance(a, dict):
+                data = a.get("data", {})
+                children = data.get("children", [])
+                if children:
+                    d0 = children[0].get("data", {})
+                    created = d0.get("created_utc")
+        if not created:
+            return False
+        age_sec = time.time() - float(created)
+        return age_sec <= max_age_hours * 3600
+    except Exception:
+        return False
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
 
+SEEN_DIR = ".cache"
+SEEN_FILE = os.path.join(SEEN_DIR, "seen_memes.txt")
+
+def load_seen_memes():
+    try:
+        os.makedirs(SEEN_DIR, exist_ok=True)
+        if not os.path.exists(SEEN_FILE):
+            return set()
+        with open(SEEN_FILE, "r", encoding="utf-8") as f:
+            return set(line.strip() for line in f if line.strip())
+    except Exception:
+        return set()
+
+def save_seen_memes(seen_urls):
+    try:
+        os.makedirs(SEEN_DIR, exist_ok=True)
+        with open(SEEN_FILE, "w", encoding="utf-8") as f:
+            for url in sorted(seen_urls):
+                f.write(url + "\n")
+    except Exception:
+        pass
 def download_binary(url, suffix):
     try:
         r = requests.get(url, headers=HEADERS, timeout=30)
@@ -208,8 +258,14 @@ def process_group(vk_session, group_id, memes, used_meme_urls):
 def main():
     print("Запуск бота...")
     vk_session = get_vk_session()
-    memes = get_reddit_memes(80)
-    used_meme_urls = set()
+    seen_urls = load_seen_memes()
+    memes_all = get_reddit_memes(120)
+    # фильтруем уже виденные
+    memes = [(u, t) for (u, t) in memes_all if u not in seen_urls]
+    # если после фильтра мало, используем остаток
+    if len(memes) < 25:
+        memes = memes_all
+    used_meme_urls = set(seen_urls)
     
     if GROUP_ID:
         process_group(vk_session, GROUP_ID, memes, used_meme_urls)
@@ -220,6 +276,8 @@ def main():
         process_group(vk_session, GROUP_ID_2, memes, used_meme_urls)
     else:
         print("GROUP_ID_2 не задан (вторая группа пропущена)")
+    
+    save_seen_memes(used_meme_urls)
 
 if __name__ == "__main__":
     main()
