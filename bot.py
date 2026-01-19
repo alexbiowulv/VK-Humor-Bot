@@ -18,59 +18,49 @@ CLIP_TITLE = "#приколы #ржака #юмор"
 # Донорские паблики, из которых берем контент
 
 
-def get_reddit_memes(max_items=80, retries=3):
+def get_reddit_memes(max_items=80):
     items = []
     subs = ["ruAsska", "TheRussianMemeSub", "KafkaFPS"]
-    try:
-        random.shuffle(subs)
+    random.shuffle(subs)
+    for sub in subs:
+        need = max_items - len(items)
+        if need <= 0:
+            break
+        res = fetch_subreddit_memes(sub, min(50, need), 24)
+        items.extend(res)
+    if not items:
         for sub in subs:
-            count = min(50, max_items - len(items))
-            if count <= 0:
+            need = max_items - len(items)
+            if need <= 0:
                 break
-            url = f"https://meme-api.com/gimme/{sub}/{count}"
-            
-            # Retry logic с экспоненциальной задержкой
-            for attempt in range(retries):
-                try:
-                    r = requests.get(url, headers=HEADERS, timeout=60)
-                    r.raise_for_status()
-                    break
-                except (requests.Timeout, requests.ConnectionError) as e:
-                    if attempt < retries - 1:
-                        wait_time = 2 ** attempt  # 1, 2, 4 секунды
-                        print(f"  Тайм-аут при получении {sub} (попытка {attempt+1}/{retries}), повтор через {wait_time}с...")
-                        time.sleep(wait_time)
-                    else:
-                        raise
-            else:
-                continue
-            data = r.json()
-            if isinstance(data, dict) and "memes" in data:
-                for m in data["memes"]:
-                    img = m.get("url")
-                    title = (m.get("title") or "").strip()
-                    post_link = m.get("postLink") or ""
-                    if not re.search(r"[А-Яа-яЁё]", title):
-                        continue
-                    if not img or not img.startswith("http"):
+            try:
+                r = http_get(f"https://meme-api.com/gimme/{sub}/{min(50, need)}", timeout=8, retries=2)
+                data = r.json()
+                if isinstance(data, dict) and "memes" in data:
+                    for m in data["memes"]:
+                        img = m.get("url")
+                        title = (m.get("title") or "").strip()
+                        post_link = m.get("postLink") or ""
+                        if not re.search(r"[А-Яа-яЁё]", title):
+                            continue
+                        if not img or not img.startswith("http"):
+                            continue
+                        if not post_link or not is_fresh_post(post_link, 24):
+                            continue
+                        if any(ext in img.lower() for ext in [".jpg", ".jpeg", ".png", ".webp", ".mp4"]):
+                            items.append((img, title))
+                elif isinstance(data, dict) and "url" in data:
+                    img = data.get("url")
+                    title = (data.get("title") or "").strip()
+                    post_link = data.get("postLink") or ""
+                    if not re.search(r"[А-Яа-яЁё]", title or ""):
                         continue
                     if not post_link or not is_fresh_post(post_link, 24):
                         continue
-                    if any(ext in img.lower() for ext in [".jpg", ".jpeg", ".png", ".webp"]):
+                    if img and img.startswith("http"):
                         items.append((img, title))
-            elif isinstance(data, dict) and "url" in data:
-                img = data.get("url")
-                title = (data.get("title") or "").strip()
-                post_link = data.get("postLink") or ""
-                if not re.search(r"[А-Яа-яЁё]", title or ""):
-                    continue
-                if not post_link or not is_fresh_post(post_link, 24):
-                    continue
-                if img and img.startswith("http"):
-                    items.append((img, title))
-    except Exception as e:
-        print(f"Ошибка получения мемов Reddit: {e}")
-    # dedupe
+            except Exception:
+                pass
     seen = set()
     uniq = []
     for url, title in items:
@@ -84,7 +74,7 @@ def is_fresh_post(post_link, max_age_hours):
         json_url = post_link
         if not json_url.endswith(".json"):
             json_url = json_url + ".json"
-        resp = requests.get(json_url, headers=HEADERS, timeout=60)
+        resp = requests.get(json_url, headers=HEADERS, timeout=20)
         resp.raise_for_status()
         j = resp.json()
         created = None
@@ -106,6 +96,55 @@ HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
 
+def http_get(url, timeout=10, retries=3):
+    last_err = None
+    for i in range(retries):
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=timeout)
+            r.raise_for_status()
+            return r
+        except Exception as e:
+            last_err = e
+            time.sleep(1.5 * (i + 1))
+    if last_err:
+        raise last_err
+
+def fetch_subreddit_memes(sub, limit, max_age_hours):
+    out = []
+    urls = [
+        f"https://www.reddit.com/r/{sub}/hot.json?limit={limit}",
+        f"https://www.reddit.com/r/{sub}/new.json?limit={limit}",
+    ]
+    for u in urls:
+        try:
+            r = http_get(u, timeout=10, retries=3)
+            data = r.json()
+            children = data.get("data", {}).get("children", [])
+            for c in children:
+                d = c.get("data", {})
+                title = (d.get("title") or "").strip()
+                if not re.search(r"[А-Яа-яЁё]", title):
+                    continue
+                created = d.get("created_utc")
+                if not created:
+                    continue
+                if time.time() - float(created) > max_age_hours * 3600:
+                    continue
+                url = d.get("url_overridden_by_dest") or d.get("url")
+                if not url or not url.startswith("http"):
+                    continue
+                if any(ext in url.lower() for ext in [".jpg", ".jpeg", ".png", ".webp", ".mp4"]):
+                    out.append((url, title))
+        except Exception:
+            pass
+    seen = set()
+    uniq = []
+    for u, t in out:
+        if u in seen:
+            continue
+        seen.add(u)
+        uniq.append((u, t))
+    return uniq
 SEEN_DIR = ".cache"
 SEEN_FILE = os.path.join(SEEN_DIR, "seen_memes.txt")
 
@@ -129,7 +168,7 @@ def save_seen_memes(seen_urls):
         pass
 def download_binary(url, suffix):
     try:
-        r = requests.get(url, headers=HEADERS, timeout=60)
+        r = requests.get(url, headers=HEADERS, timeout=30)
         r.raise_for_status()
         fname = f"temp_{random.randint(10000, 99999)}{suffix}"
         with open(fname, "wb") as f:
@@ -198,7 +237,7 @@ def upload_video_to_vk(vk_session, group_id, filepath, title):
 def upload_photo_to_vk(vk_session, group_id, img_url):
     """Скачивает и загружает фото в ВК"""
     try:
-        img_data = requests.get(img_url, headers=HEADERS, timeout=60).content
+        img_data = requests.get(img_url, headers=HEADERS).content
         filename = f'temp_{random.randint(1, 10000)}.jpg'
         
         with open(filename, 'wb') as f:
