@@ -96,7 +96,8 @@ def is_fresh_post(post_link, max_age_hours):
     except Exception:
         return False
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Accept': 'application/json'
 }
 
 def http_get(url, timeout=10, retries=3):
@@ -117,7 +118,10 @@ def fetch_subreddit_memes(sub, limit, max_age_hours):
     urls = [
         f"https://www.reddit.com/r/{sub}/hot.json?limit={limit}",
         f"https://www.reddit.com/r/{sub}/new.json?limit={limit}",
+        f"https://api.reddit.com/r/{sub}/hot?limit={limit}",
+        f"https://api.reddit.com/r/{sub}/new?limit={limit}",
     ]
+    random.shuffle(urls)
     for u in urls:
         try:
             r = http_get(u, timeout=10, retries=3)
@@ -148,23 +152,52 @@ def fetch_subreddit_memes(sub, limit, max_age_hours):
     return uniq
 SEEN_DIR = ".cache"
 SEEN_FILE = os.path.join(SEEN_DIR, "seen_memes.txt")
+SEEN_TTL_DAYS = 3
+SEEN_MAX = 5000
+
+def _read_seen_dict():
+    d = {}
+    try:
+        if os.path.exists(SEEN_FILE):
+            with open(SEEN_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if "|" in line:
+                        url, ts = line.split("|", 1)
+                        try:
+                            d[url] = float(ts)
+                        except Exception:
+                            d[url] = 0.0
+                    else:
+                        d[line] = 0.0
+    except Exception:
+        pass
+    return d
 
 def load_seen_memes():
-    try:
-        os.makedirs(SEEN_DIR, exist_ok=True)
-        if not os.path.exists(SEEN_FILE):
-            return set()
-        with open(SEEN_FILE, "r", encoding="utf-8") as f:
-            return set(line.strip() for line in f if line.strip())
-    except Exception:
-        return set()
+    now = time.time()
+    ttl = SEEN_TTL_DAYS * 86400
+    d = _read_seen_dict()
+    return {u for u, ts in d.items() if ts == 0.0 or (now - ts) <= ttl}
 
 def save_seen_memes(seen_urls):
     try:
         os.makedirs(SEEN_DIR, exist_ok=True)
+        existing = _read_seen_dict()
+        now = time.time()
+        for url in seen_urls:
+            if url not in existing:
+                existing[url] = now
+        ttl = SEEN_TTL_DAYS * 86400
+        existing = {u: ts for u, ts in existing.items() if ts == 0.0 or (now - ts) <= ttl}
+        items = sorted(existing.items(), key=lambda x: x[1], reverse=True)
+        if len(items) > SEEN_MAX:
+            items = items[:SEEN_MAX]
         with open(SEEN_FILE, "w", encoding="utf-8") as f:
-            for url in sorted(seen_urls):
-                f.write(url + "\n")
+            for u, ts in items:
+                f.write(f"{u}|{ts}\n")
     except Exception:
         pass
 def download_binary(url, suffix):
@@ -282,6 +315,10 @@ def process_group(vk_session, group_id, memes, used_meme_urls):
     start_time = datetime.now()
     posts_count = 10
 
+    if not memes:
+        print("  Нет свежих мемов для публикации")
+        return
+
     scheduled = 0
     meme_index = 0
     while scheduled < posts_count and meme_index < len(memes):
@@ -314,11 +351,13 @@ def main():
     vk_session = get_vk_session()
     seen_urls = load_seen_memes()
     memes_all = get_reddit_memes(120)
+    print(f"Получено всего мемов: {len(memes_all)}")
     # фильтруем уже виденные
     memes = [(u, t) for (u, t) in memes_all if u not in seen_urls]
     # если после фильтра мало, используем остаток
     if len(memes) < 25:
         memes = memes_all
+    print(f"К публикации после фильтрации уникальности: {len(memes)}")
     used_meme_urls = set(seen_urls)
     
     if GROUP_ID:
