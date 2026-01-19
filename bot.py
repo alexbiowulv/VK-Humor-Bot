@@ -18,7 +18,7 @@ CLIP_TITLE = "#приколы #ржака #юмор"
 # Донорские паблики, из которых берем контент
 
 
-def get_reddit_memes(max_items=80):
+def get_reddit_memes(max_items=80, retries=3):
     items = []
     subs = ["ruAsska", "TheRussianMemeSub", "KafkaFPS"]
     try:
@@ -28,8 +28,22 @@ def get_reddit_memes(max_items=80):
             if count <= 0:
                 break
             url = f"https://meme-api.com/gimme/{sub}/{count}"
-            r = requests.get(url, headers=HEADERS, timeout=20)
-            r.raise_for_status()
+            
+            # Retry logic с экспоненциальной задержкой
+            for attempt in range(retries):
+                try:
+                    r = requests.get(url, headers=HEADERS, timeout=60)
+                    r.raise_for_status()
+                    break
+                except (requests.Timeout, requests.ConnectionError) as e:
+                    if attempt < retries - 1:
+                        wait_time = 2 ** attempt  # 1, 2, 4 секунды
+                        print(f"  Тайм-аут при получении {sub} (попытка {attempt+1}/{retries}), повтор через {wait_time}с...")
+                        time.sleep(wait_time)
+                    else:
+                        raise
+            else:
+                continue
             data = r.json()
             if isinstance(data, dict) and "memes" in data:
                 for m in data["memes"]:
@@ -70,7 +84,7 @@ def is_fresh_post(post_link, max_age_hours):
         json_url = post_link
         if not json_url.endswith(".json"):
             json_url = json_url + ".json"
-        resp = requests.get(json_url, headers=HEADERS, timeout=20)
+        resp = requests.get(json_url, headers=HEADERS, timeout=60)
         resp.raise_for_status()
         j = resp.json()
         created = None
@@ -115,7 +129,7 @@ def save_seen_memes(seen_urls):
         pass
 def download_binary(url, suffix):
     try:
-        r = requests.get(url, headers=HEADERS, timeout=30)
+        r = requests.get(url, headers=HEADERS, timeout=60)
         r.raise_for_status()
         fname = f"temp_{random.randint(10000, 99999)}{suffix}"
         with open(fname, "wb") as f:
@@ -184,7 +198,7 @@ def upload_video_to_vk(vk_session, group_id, filepath, title):
 def upload_photo_to_vk(vk_session, group_id, img_url):
     """Скачивает и загружает фото в ВК"""
     try:
-        img_data = requests.get(img_url, headers=HEADERS).content
+        img_data = requests.get(img_url, headers=HEADERS, timeout=60).content
         filename = f'temp_{random.randint(1, 10000)}.jpg'
         
         with open(filename, 'wb') as f:
