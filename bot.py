@@ -22,19 +22,24 @@ def get_reddit_memes(max_items=80):
     items = []
     subs = ["ruAsska", "TheRussianMemeSub", "KafkaFPS"]
     random.shuffle(subs)
+    print(f"  Получение мемов с Reddit (попытка 1: fetch_subreddit_memes)...")
     for sub in subs:
         need = max_items - len(items)
         if need <= 0:
             break
         res = fetch_subreddit_memes(sub, min(50, need), 24)
         items.extend(res)
+        if res:
+            print(f"    {sub}: получено {len(res)} мемов")
+    
     if not items:
+        print(f"  Попытка 2: meme-api.com...")
         for sub in subs:
             need = max_items - len(items)
             if need <= 0:
                 break
             try:
-                r = http_get(f"https://meme-api.com/gimme/{sub}/{min(50, need)}", timeout=8, retries=2)
+                r = http_get(f"https://meme-api.com/gimme/{sub}/{min(50, need)}", timeout=30, retries=2)
                 data = r.json()
                 if isinstance(data, dict) and "memes" in data:
                     for m in data["memes"]:
@@ -47,6 +52,7 @@ def get_reddit_memes(max_items=80):
                             continue
                         if any(ext in img.lower() for ext in [".jpg", ".jpeg", ".png", ".webp", ".mp4"]):
                             items.append((img, title))
+                    print(f"    {sub}: получено {len([m for m in data['memes'] if (m.get('url') or '').startswith('http')])} мемов")
                 elif isinstance(data, dict) and "url" in data:
                     img = data.get("url")
                     title = (data.get("title") or "").strip()
@@ -55,8 +61,8 @@ def get_reddit_memes(max_items=80):
                         continue
                     if img and img.startswith("http"):
                         items.append((img, title))
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"    Ошибка при получении {sub} из meme-api.com: {e}")
     seen = set()
     uniq = []
     for url, title in items:
@@ -64,13 +70,14 @@ def get_reddit_memes(max_items=80):
             continue
         seen.add(url)
         uniq.append((url, title))
+    print(f"  Всего получено уникальных мемов: {len(uniq[:max_items])}")
     return uniq[:max_items]
 def is_fresh_post(post_link, max_age_hours):
     try:
         json_url = post_link
         if not json_url.endswith(".json"):
             json_url = json_url + ".json"
-        resp = requests.get(json_url, headers=HEADERS, timeout=20)
+        resp = requests.get(json_url, headers=HEADERS, timeout=60)
         resp.raise_for_status()
         j = resp.json()
         created = None
@@ -162,7 +169,7 @@ def save_seen_memes(seen_urls):
         pass
 def download_binary(url, suffix):
     try:
-        r = requests.get(url, headers=HEADERS, timeout=30)
+        r = requests.get(url, headers=HEADERS, timeout=60)
         r.raise_for_status()
         fname = f"temp_{random.randint(10000, 99999)}{suffix}"
         with open(fname, "wb") as f:
@@ -231,7 +238,7 @@ def upload_video_to_vk(vk_session, group_id, filepath, title):
 def upload_photo_to_vk(vk_session, group_id, img_url):
     """Скачивает и загружает фото в ВК"""
     try:
-        img_data = requests.get(img_url, headers=HEADERS).content
+        img_data = requests.get(img_url, headers=HEADERS, timeout=60).content
         filename = f'temp_{random.randint(1, 10000)}.jpg'
         
         with open(filename, 'wb') as f:
@@ -272,6 +279,7 @@ def post_to_vk(vk_session, group_id, message, attachment, publish_date):
 
 def process_group(vk_session, group_id, memes, used_meme_urls):
     print(f"\n--- Обработка группы {group_id} (Мемы Reddit) ---")
+    print(f"  Доступно мемов: {len(memes)}")
     start_time = datetime.now()
     posts_count = 10
 
@@ -306,6 +314,7 @@ def main():
     print("Запуск бота...")
     vk_session = get_vk_session()
     seen_urls = load_seen_memes()
+    print(f"Ранее виденных мемов в кэше: {len(seen_urls)}")
     memes_all = get_reddit_memes(120)
     # фильтруем уже виденные
     memes = [(u, t) for (u, t) in memes_all if u not in seen_urls]
