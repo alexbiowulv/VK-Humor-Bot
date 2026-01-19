@@ -28,6 +28,7 @@ def get_reddit_memes(max_items=80):
             break
         res = fetch_subreddit_memes(sub, min(50, need), 24)
         items.extend(res)
+        print(f"Сабреддит {sub}: собрано {len(res)}")
     if not items:
         for sub in subs:
             need = max_items - len(items)
@@ -40,23 +41,18 @@ def get_reddit_memes(max_items=80):
                     for m in data["memes"]:
                         img = m.get("url")
                         title = (m.get("title") or "").strip()
-                        post_link = m.get("postLink") or ""
                         if not img or not img.startswith("http"):
-                            continue
-                        if not post_link or not is_fresh_post(post_link, 24):
                             continue
                         if any(ext in img.lower() for ext in [".jpg", ".jpeg", ".png", ".webp", ".mp4"]):
                             items.append((img, title))
                 elif isinstance(data, dict) and "url" in data:
                     img = data.get("url")
                     title = (data.get("title") or "").strip()
-                    post_link = data.get("postLink") or ""
-                    if not post_link or not is_fresh_post(post_link, 24):
-                        continue
                     if img and img.startswith("http"):
                         items.append((img, title))
             except Exception:
                 pass
+        print(f"meme-api резерв: собрано {len(items)} всего")
     if len(items) < max_items:
         for sub in ["memes", "dankmemes"]:
             need = max_items - len(items)
@@ -64,6 +60,7 @@ def get_reddit_memes(max_items=80):
                 break
             res = fetch_subreddit_memes(sub, min(50, need), 24)
             items.extend(res)
+            print(f"Фолбэк {sub}: собрано {len(res)}")
     seen = set()
     uniq = []
     for url, title in items:
@@ -116,8 +113,10 @@ def http_get(url, timeout=10, retries=3):
 def fetch_subreddit_memes(sub, limit, max_age_hours):
     out = []
     urls = [
-        f"https://www.reddit.com/r/{sub}/hot.json?limit={limit}",
-        f"https://www.reddit.com/r/{sub}/new.json?limit={limit}",
+        f"https://www.reddit.com/r/{sub}/top.json?t=day&limit={limit}&raw_json=1",
+        f"https://www.reddit.com/r/{sub}/hot.json?limit={limit}&raw_json=1",
+        f"https://www.reddit.com/r/{sub}/new.json?limit={limit}&raw_json=1",
+        f"https://api.reddit.com/r/{sub}/top?t=day&limit={limit}",
         f"https://api.reddit.com/r/{sub}/hot?limit={limit}",
         f"https://api.reddit.com/r/{sub}/new?limit={limit}",
     ]
