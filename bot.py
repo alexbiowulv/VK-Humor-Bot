@@ -129,11 +129,6 @@ def fetch_subreddit_memes(sub, limit, max_age_hours):
             for c in children:
                 d = c.get("data", {})
                 title = (d.get("title") or "").strip()
-                created = d.get("created_utc")
-                if not created:
-                    continue
-                if time.time() - float(created) > max_age_hours * 3600:
-                    continue
                 url = d.get("url_overridden_by_dest") or d.get("url")
                 if not url or not url.startswith("http"):
                     continue
@@ -149,56 +144,6 @@ def fetch_subreddit_memes(sub, limit, max_age_hours):
         seen.add(u)
         uniq.append((u, t))
     return uniq
-SEEN_DIR = ".cache"
-SEEN_FILE = os.path.join(SEEN_DIR, "seen_memes.txt")
-SEEN_TTL_DAYS = 3
-SEEN_MAX = 5000
-
-def _read_seen_dict():
-    d = {}
-    try:
-        if os.path.exists(SEEN_FILE):
-            with open(SEEN_FILE, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    if "|" in line:
-                        url, ts = line.split("|", 1)
-                        try:
-                            d[url] = float(ts)
-                        except Exception:
-                            d[url] = 0.0
-                    else:
-                        d[line] = 0.0
-    except Exception:
-        pass
-    return d
-
-def load_seen_memes():
-    now = time.time()
-    ttl = SEEN_TTL_DAYS * 86400
-    d = _read_seen_dict()
-    return {u for u, ts in d.items() if ts == 0.0 or (now - ts) <= ttl}
-
-def save_seen_memes(seen_urls):
-    try:
-        os.makedirs(SEEN_DIR, exist_ok=True)
-        existing = _read_seen_dict()
-        now = time.time()
-        for url in seen_urls:
-            if url not in existing:
-                existing[url] = now
-        ttl = SEEN_TTL_DAYS * 86400
-        existing = {u: ts for u, ts in existing.items() if ts == 0.0 or (now - ts) <= ttl}
-        items = sorted(existing.items(), key=lambda x: x[1], reverse=True)
-        if len(items) > SEEN_MAX:
-            items = items[:SEEN_MAX]
-        with open(SEEN_FILE, "w", encoding="utf-8") as f:
-            for u, ts in items:
-                f.write(f"{u}|{ts}\n")
-    except Exception:
-        pass
 def download_binary(url, suffix):
     try:
         r = requests.get(url, headers=HEADERS, timeout=30)
@@ -348,16 +293,11 @@ def process_group(vk_session, group_id, memes, used_meme_urls):
 def main():
     print("Запуск бота...")
     vk_session = get_vk_session()
-    seen_urls = load_seen_memes()
     memes_all = get_reddit_memes(120)
     print(f"Получено всего мемов: {len(memes_all)}")
-    # фильтруем уже виденные
-    memes = [(u, t) for (u, t) in memes_all if u not in seen_urls]
-    # если после фильтра мало, используем остаток
-    if len(memes) < 25:
-        memes = memes_all
+    memes = memes_all
     print(f"К публикации после фильтрации уникальности: {len(memes)}")
-    used_meme_urls = set(seen_urls)
+    used_meme_urls = set()
     
     if GROUP_ID:
         process_group(vk_session, GROUP_ID, memes, used_meme_urls)
@@ -369,7 +309,6 @@ def main():
     else:
         print("GROUP_ID_2 не задан (вторая группа пропущена)")
     
-    save_seen_memes(used_meme_urls)
 
 if __name__ == "__main__":
     main()
