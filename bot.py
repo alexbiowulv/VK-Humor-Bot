@@ -41,8 +41,6 @@ def get_reddit_memes(max_items=80):
                         img = m.get("url")
                         title = (m.get("title") or "").strip()
                         post_link = m.get("postLink") or ""
-                        if not re.search(r"[А-Яа-яЁё]", title):
-                            continue
                         if not img or not img.startswith("http"):
                             continue
                         if not post_link or not is_fresh_post(post_link, 24):
@@ -53,8 +51,6 @@ def get_reddit_memes(max_items=80):
                     img = data.get("url")
                     title = (data.get("title") or "").strip()
                     post_link = data.get("postLink") or ""
-                    if not re.search(r"[А-Яа-яЁё]", title or ""):
-                        continue
                     if not post_link or not is_fresh_post(post_link, 24):
                         continue
                     if img and img.startswith("http"):
@@ -123,8 +119,6 @@ def fetch_subreddit_memes(sub, limit, max_age_hours):
             for c in children:
                 d = c.get("data", {})
                 title = (d.get("title") or "").strip()
-                if not re.search(r"[А-Яа-яЁё]", title):
-                    continue
                 created = d.get("created_utc")
                 if not created:
                     continue
